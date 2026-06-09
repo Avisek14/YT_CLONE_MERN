@@ -2,7 +2,7 @@
 
 export function buildAvatarUrl(name = "Avatar") {
     const initials = getInitials(name)
-    return `https://ui-avatars.com/api/?name=${encodeURIComponent(initials)}&background=0f766e&color=f8fafc&size=160&bold=true`
+    return `https://ui-avatars.com/api/?name=${encodeURIComponent(initials)}&background=0284c7&color=f8fafc&size=160&bold=true`
 }
 
 export function buildChannelBannerUrl(label = "Channel Banner") {
