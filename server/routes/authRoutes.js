@@ -1,0 +1,193 @@
+import express from "express"
+import jwt from "jsonwebtoken"
+import bcrypt from "bcryptjs"
+import User from "../models/User.js"
+import authMiddleware from "../middleware/authMiddleware.js"
+import { validateRegistration, validateLogin } from "../utils/validators.js"
+import { buildAvatarUrl, normalizeAvatarUrl } from "../utils/helpers.js"
+
+const router = express.Router()
+
+// ==================== REGISTER ====================
+// POST /api/auth/register
+router.post("/register", async (req, res) => {
+    try {
+        const { username, email, password } = req.body
+
+        // Validate input
+        const validation = validateRegistration({ username, email, password })
+        if (!validation.isValid) {
+            return res.status(400).json({
+                success: false,
+                message: "Validation failed. Please check the errors below.",
+                errors: validation.errors,
+            })
+        }
+
+        // Check duplicate user
+        const existingUser = await User.findOne({
+            $or: [
+                { email: email.toLowerCase() },
+                { username: username.toLowerCase() },
+            ],
+        })
+
+        if (existingUser) {
+            const duplicateField =
+                existingUser.email === email.toLowerCase() ? "email" : "username"
+            return res.status(409).json({
+                success: false,
+                message: `A user with this ${duplicateField} already exists.`,
+                errors: {
+                    [duplicateField]: `${duplicateField.charAt(0).toUpperCase() + duplicateField.slice(1)} is already in use.`,
+                },
+            })
+        }
+
+        // Hash password
+        const hashedPassword = await bcrypt.hash(password, 10)
+
+        // Create user
+        const userId = `user_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
+
+        const newUser = new User({
+            userId,
+            username: username.trim().toLowerCase(),
+            email: email.trim().toLowerCase(),
+            password: hashedPassword,
+            avatar: buildAvatarUrl(username),
+        })
+
+        await newUser.save()
+
+        res.status(201).json({
+            success: true,
+            message: "User registered successfully.",
+            user: {
+                id: newUser._id,
+                userId: newUser.userId,
+                username: newUser.username,
+                email: newUser.email,
+                avatar: normalizeAvatarUrl(newUser.avatar, newUser.username),
+            },
+        })
+    } catch (error) {
+        console.error("Register error:", error)
+        res.status(500).json({
+            success: false,
+            message: "Registration failed. Please try again later.",
+            error: process.env.NODE_ENV === "development" ? error.message : undefined,
+        })
+    }
+})
+
+// ==================== LOGIN ====================
+// POST /api/auth/login
+router.post("/login", async (req, res) => {
+    try {
+        const { email, password } = req.body
+
+        // Validate input
+        const validation = validateLogin({ email, password })
+        if (!validation.isValid) {
+            return res.status(400).json({
+                success: false,
+                message: "Validation failed. Please check the errors below.",
+                errors: validation.errors,
+            })
+        }
+
+        // Find user
+        const user = await User.findOne({ email: email.toLowerCase() })
+        if (!user) {
+            return res.status(401).json({
+                success: false,
+                message: "Invalid email or password.",
+                errors: {
+                    credentials: "The email or password you provided is incorrect.",
+                },
+            })
+        }
+
+        // Verify password
+        const isPasswordValid = await bcrypt.compare(password, user.password)
+        if (!isPasswordValid) {
+            return res.status(401).json({
+                success: false,
+                message: "Invalid email or password.",
+                errors: {
+                    credentials: "The email or password you provided is incorrect.",
+                },
+            })
+        }
+
+        // Generate token
+        const token = jwt.sign(
+            {
+                userId: user._id,
+                username: user.username,
+                email: user.email,
+            },
+            process.env.JWT_SECRET,
+            { expiresIn: process.env.JWT_EXPIRES_IN || "7d" },
+        )
+
+        res.status(200).json({
+            success: true,
+            message: "Login successful.",
+            user: {
+                id: user._id,
+                userId: user.userId,
+                username: user.username,
+                email: user.email,
+                avatar: normalizeAvatarUrl(user.avatar, user.username),
+            },
+            token,
+        })
+    } catch (error) {
+        console.error("Login error:", error)
+        res.status(500).json({
+            success: false,
+            message: "Login failed. Please try again later.",
+            error: process.env.NODE_ENV === "development" ? error.message : undefined,
+        })
+    }
+})
+
+// ==================== GET PROFILE ====================
+// GET /api/auth/me (protected)
+router.get("/me", authMiddleware, async (req, res) => {
+    try {
+        const user = await User.findById(req.user.userId).select("-password")
+
+        if (!user) {
+            return res.status(404).json({
+                success: false,
+                message: "User profile not found. Please log in again.",
+            })
+        }
+
+        res.status(200).json({
+            success: true,
+            message: "User profile retrieved successfully.",
+            user: {
+                id: user._id,
+                userId: user.userId,
+                username: user.username,
+                email: user.email,
+                avatar: normalizeAvatarUrl(user.avatar, user.username),
+                channels: user.channels,
+                createdAt: user.createdAt,
+            },
+        })
+    } catch (error) {
+        console.error("Get user profile error:", error)
+        res.status(500).json({
+            success: false,
+            message: "Failed to retrieve user profile.",
+            error: process.env.NODE_ENV === "development" ? error.message : undefined,
+        })
+    }
+})
+
+export default router
